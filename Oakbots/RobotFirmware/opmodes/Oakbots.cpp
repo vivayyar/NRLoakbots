@@ -75,14 +75,14 @@ class Oakbots : public NRLOpMode {
 
     // FIX 3: arm moves smoothly while D-pad up/down is HELD.
     float armTarget = 90;          // where the arm is being told to go
-    const float ARM_STEP = 1.0f;   // degrees per tick (100 ticks/sec = 100 deg/sec)
+    const float ARM_STEP = 0.6f;   // degrees per tick (60 deg/sec) - slower = smoother under load
     const float ARM_MIN  = 20;     // lowest the arm may go  - adjust for your robot
     const float ARM_MAX  = 160;    // highest the arm may go - adjust for your robot
 
     // Gripper moves smoothly while RB/LB is HELD.
     float gripTarget = 90;          // where the gripper is being told to go
     const float GRIP_STEP = 1.5f;   // degrees per tick (150 deg/sec)
-    const float GRIP_MIN  = 60;     // most closed - adjust for your gripper
+    const float GRIP_MIN  = 0;      // most closed - TEMPORARY 0 for calibration, see notes
     const float GRIP_MAX  = 120;    // most open   - adjust for your gripper
 
 public:
@@ -183,7 +183,7 @@ public:
         telemetry.addData("heading", NRLComms::isHeadingReady() ? NRLComms::getHeading() : -1.0f);
         telemetry.addData("hdg status", NRLComms::isHeadingReady() ? "READY" : "CALIBRATING");
         telemetry.addData("battery V", power.getBatteryVoltage());
-        telemetry.addData("motor A", power.getMotorCurrent());   // relative only (Module 3.9)
+        telemetry.addData("servo A", power.getServoCurrent());   // jumps up when a servo strains
         telemetry.addData("arm", armTarget);
         telemetry.addData("gripper", gripTarget);
     }

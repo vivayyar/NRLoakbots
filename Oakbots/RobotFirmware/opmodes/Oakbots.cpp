@@ -9,6 +9,7 @@
 #define BTN_ARM_UP        BTN_DPAD_UP     // D-pad up    (photo: lower button of left cluster)
 #define BTN_ARM_DOWN      BTN_DPAD_DOWN   // D-pad down  (photo: upper button of left cluster)
 #define BTN_ECO_TOGGLE    BTN_DPAD_LEFT   // D-pad left  (photo: right button of left cluster)
+#define BTN_BALANCE       BTN_X           // SELECT (X): HOLD = auto-dock / auto-balance
 #define BTN_DROPPER       BTN_DPAD_RIGHT  // D-pad right (photo: left button of left cluster) - press = open/close
 #define BTN_GRIP_OPEN     BTN_RB          // RB          (photo: left red side button)
 #define BTN_GRIP_CLOSE    BTN_LB          // LB          (photo: right red side button)
@@ -30,6 +31,22 @@ static HexaServo gripper {{ .signalPin = SERVO_2, .startAngle = 90.0f, .settleMs
 static constexpr float DROP_CLOSED = 0;     // holds the items in   - tune on the robot
 static constexpr float DROP_OPEN   = 90;    // lets the items fall  - tune on the robot
 static HexaServo dropper {{ .signalPin = SERVO_3, .startAngle = DROP_CLOSED, .settleMs = 0 }};
+
+// ---------- Auto-dock / auto-balance (hold X) ----------
+// Our own handle on the on-board IMU for TILT (Module 3.5: declare your own
+// HexaIMU for raw motion). Heading still comes from NRLComms.
+static HexaIMU imu{ hexaImuConfig() };
+// Which IMU axis points along the robot's driving direction. CHECK on the
+// robot: tilt the nose UP by hand and watch "pitch" on telemetry. It should
+// go POSITIVE. If it barely moves, set PITCH_USE_X to false. If it goes
+// negative, set PITCH_SIGN to -1.
+static constexpr bool  PITCH_USE_X = true;
+static constexpr float PITCH_SIGN  = 1.0f;
+static constexpr float BAL_KP       = 0.025f;  // drive per degree of tilt
+static constexpr float BAL_KD       = 0.004f;  // damping per deg/s (stops overshoot)
+static constexpr float BAL_MAX      = 0.35f;   // never faster than this while balancing
+static constexpr float BAL_LEVEL    = 2.5f;    // within +/- this many degrees = level, hold still
+static constexpr float BAL_HDG_KP   = 0.02f;   // keeps the robot pointing straight while docking
 
 class Oakbots : public NRLOpMode {
     // FIX 2: straight-line trim.
@@ -95,6 +112,11 @@ class Oakbots : public NRLOpMode {
     // Gripper moves smoothly while RB/LB is HELD.
     float gripTarget = 90;          // where the gripper is being told to go
     bool  _dropOpen  = false;       // payload dropper open/closed
+    float _pitch     = 0;           // filtered tilt, degrees (+ = nose up)
+    float _pitchRate = 0;           // deg/s
+    bool  _balancing = false;
+    float _dockHeading = 0;         // heading to hold while docking
+    uint32_t _lastMs = 0;
     const float GRIP_STEP = 1.5f;   // degrees per tick (150 deg/sec)
     const float GRIP_MIN  = 0;      // most closed - TEMPORARY 0 for calibration, see notes
     const float GRIP_MAX  = 120;    // most open   - adjust for your gripper
@@ -107,10 +129,12 @@ public:
         arm.begin();
         gripper.begin();
         dropper.begin();                // starts CLOSED
+        imu.begin();                    // raw tilt for auto-balance
         _oledOk = _oled.begin();       // remember whether the screen started
         armTarget = 90;
         gripTarget = 90;
         _dropOpen = false;
+        _pitch = 0; _pitchRate = 0; _balancing = false; _lastMs = millis();
         forwardNow = 0;
         turnNow = 0;
         mode = &NORMAL;
@@ -119,6 +143,21 @@ public:
 
     void loop() override {
         // Runs 100 times a second until STOP
+
+        // ---- Tilt (pitch) from the IMU ----
+        // Angle from the accelerometer (which way gravity points), smoothed
+        // so bumps and driving jolts don't make it jump. Rate = how fast it changes.
+        uint32_t now = millis();
+        float dt = (now - _lastMs) / 1000.0f;
+        _lastMs = now;
+        imu.tick(now);
+        imu.read();
+        float aFwd = PITCH_USE_X ? imu.getAccelX() : imu.getAccelY();
+        float rawPitch = PITCH_SIGN * atan2f(aFwd, imu.getAccelZ()) * 57.2958f;
+        float prevPitch = _pitch;
+        _pitch += 0.15f * (rawPitch - _pitch);                       // low-pass filter
+        if (dt > 0.0f && dt < 0.1f)
+            _pitchRate += 0.3f * (((_pitch - prevPitch) / dt) - _pitchRate);
 
         // ---- Drive mode ----
         // Eco button toggles eco on/off. Eco overrides the switch.
@@ -138,10 +177,37 @@ public:
         forwardNow = rampToward(forwardNow, forwardWanted, mode->fwdAccel,  mode->fwdDecel);
         turnNow    = rampToward(turnNow,    turnWanted,    mode->turnAccel, mode->turnDecel);
 
-        // 3. Straight-line trim, mode's top speed, then drive
-        float turn = turnNow - DRIVE_TRIM * forwardNow;
-        drive.setScale(mode->topSpeed);
-        drive.drive(forwardNow, turn);
+        // 3. Auto-dock / auto-balance while X is HELD
+        if (gamepad1.justPressed(BTN_BALANCE)) _dockHeading = NRLComms::getHeading();
+        _balancing = gamepad1.pressed(BTN_BALANCE);
+
+        if (_balancing) {
+            // Drive UPHILL (towards the raised side) to level the platform,
+            // with damping so it does not overshoot past the balance point.
+            float fwd = 0;
+            if (fabsf(_pitch) > BAL_LEVEL)
+                fwd = BAL_KP * _pitch + BAL_KD * _pitchRate;
+            if (fwd >  BAL_MAX) fwd =  BAL_MAX;
+            if (fwd < -BAL_MAX) fwd = -BAL_MAX;
+
+            // Hold the heading we had when X was pressed (square onto the dock).
+            float hdgErr = NRLComms::getHeading() - _dockHeading;
+            while (hdgErr > 180)  hdgErr -= 360;
+            while (hdgErr < -180) hdgErr += 360;
+            float turn = -BAL_HDG_KP * hdgErr;
+            if (turn >  0.3f) turn =  0.3f;
+            if (turn < -0.3f) turn = -0.3f;
+
+            drive.setScale(1.0f);
+            drive.drive(fwd, turn);
+            forwardNow = 0;                  // so releasing X never lurches
+            turnNow    = 0;
+        } else {
+            // Normal driving: straight-line trim, mode's top speed, then drive
+            float turn = turnNow - DRIVE_TRIM * forwardNow;
+            drive.setScale(mode->topSpeed);
+            drive.drive(forwardNow, turn);
+        }
 
         // ---- Arm ----
         // Hold to move. Servo is mounted reversed, so up = lower angle.
@@ -173,6 +239,8 @@ public:
         // ---- Status LED (Module 3.7) ----
         // Low battery = fast red blink. Otherwise colour shows the drive mode.
         if (power.isBatteryLow())  userLed.setBlink(255, 0, 0, 250);
+        else if (_balancing && fabsf(_pitch) <= BAL_LEVEL) userLed.setSolid(255, 255, 255);   // white = LEVEL
+        else if (_balancing)       userLed.setBlink(0, 200, 200, 200);  // cyan blink = balancing
         else if (mode == &SPORT)   userLed.setSolid(80, 0, 0);    // red
         else if (mode == &ECO)     userLed.setSolid(0, 80, 0);    // green
         else                       userLed.setSolid(0, 0, 80);    // blue = NORMAL
@@ -210,6 +278,8 @@ public:
         telemetry.addData("arm", armTarget);
         telemetry.addData("gripper", gripTarget);
         telemetry.addData("dropper", _dropOpen ? "OPEN" : "CLOSED");
+        telemetry.addData("pitch", _pitch);
+        telemetry.addData("balance", _balancing ? (fabsf(_pitch) <= BAL_LEVEL ? "LEVEL" : "WORKING") : "off");
     }
 
     void stop() override {

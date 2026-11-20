@@ -17,8 +17,11 @@
 // FIX 1: flipped moved from the right motor to the left motor.
 // Forward/back and left/right were all reversed, which means both
 // motors were spinning the wrong way. Swapping the flip fixes both.
-static HexaDCMotor leftMotor  {{ .dirPin = MOTOR_L_DIR, .pwmPin = MOTOR_L_PWM, .flipped = true }};
-static HexaDCMotor rightMotor {{ .dirPin = MOTOR_R_DIR, .pwmPin = MOTOR_R_PWM }};
+// minDrive = motor "stiction floor" (NRL HexaDCMotor.h): small commands are
+// lifted to at least this PWM so the wheels actually turn instead of buzzing.
+// NRL measured about 30/255 on their robot. Helps Eco push up slopes.
+static HexaDCMotor leftMotor  {{ .dirPin = MOTOR_L_DIR, .pwmPin = MOTOR_L_PWM, .flipped = true, .minDrive = 30 }};
+static HexaDCMotor rightMotor {{ .dirPin = MOTOR_R_DIR, .pwmPin = MOTOR_R_PWM, .minDrive = 30 }};
 static TankDrive drive(leftMotor, rightMotor);
 static HexaServo arm     {{ .signalPin = SERVO_1, .startAngle = 90.0f, .settleMs = 0 }};
 static HexaServo gripper {{ .signalPin = SERVO_2, .startAngle = 90.0f, .settleMs = 0 }};
@@ -45,8 +48,8 @@ class Oakbots : public NRLOpMode {
         float turnAccel, turnDecel;
     };
     //                         name      top    fwdAcc   fwdDec  turnAcc  turnDec
-    const DriveMode ECO    = { "ECO",    0.50f, 0.007f,  0.02f,  0.008f,  0.025f }; // ~1.4 s to full, half speed
-    const DriveMode NORMAL = { "NORMAL", 1.00f, 0.02f,   0.04f,  0.025f,  0.05f  }; // ~0.5 s to full (was 0.8 s)
+    const DriveMode ECO    = { "ECO",    0.65f, 0.010f,  0.03f,  0.010f,  0.03f  }; // ~1 s to full, 65% speed (more push for slopes)
+    const DriveMode NORMAL = { "NORMAL", 1.00f, 0.02f,   0.04f,  0.04f,   0.07f  }; // ~0.5 s to full, turns ~0.25 s
     const DriveMode SPORT  = { "SPORT",  1.00f, 0.035f,  0.06f,  0.035f,  0.06f  }; // ~0.3 s to full
     const DriveMode* mode = &NORMAL;   // start in NORMAL
     bool _eco = false;                 // eco on/off (toggled by its button)
@@ -72,6 +75,8 @@ class Oakbots : public NRLOpMode {
     // Makes small stick movements gentler for fine control,
     // while full stick still gives full speed.
     static float curve(float x) { return x * fabsf(x); }
+    // Turning uses a gentler curve, so small stick moves still turn promptly.
+    static float turnCurve(float x) { return x * (0.5f + 0.5f * fabsf(x)); }
 
     // FIX 3: arm moves smoothly while D-pad up/down is HELD.
     float armTarget = 90;          // where the arm is being told to go
@@ -119,7 +124,7 @@ public:
         // Left stick = forward/back, right stick = turn
         // 1. Read the sticks and soften small movements
         float forwardWanted = curve(gamepad1.leftY());
-        float turnWanted    = curve(gamepad1.rightX());
+        float turnWanted    = turnCurve(gamepad1.rightX());
 
         // 2. Ease toward what the sticks want, at the current mode's rate
         forwardNow = rampToward(forwardNow, forwardWanted, mode->fwdAccel,  mode->fwdDecel);

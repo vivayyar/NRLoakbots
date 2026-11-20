@@ -279,7 +279,7 @@ public:
         telemetry.addData("gripper", gripTarget);
         telemetry.addData("dropper", _dropOpen ? "OPEN" : "CLOSED");
         telemetry.addData("pitch", _pitch);
-        telemetry.addData("balance", _balancing ? (fabsf(_pitch) <= BAL_LEVEL ? "LEVEL" : "WORKING") : "off");
+        telemetry.addData("docking", _balancing ? (fabsf(_pitch) <= BAL_LEVEL ? "ON - LEVEL" : "ON") : "OFF");
     }
 
     void stop() override {

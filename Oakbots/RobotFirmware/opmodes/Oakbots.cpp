@@ -46,8 +46,8 @@ class Oakbots : public NRLOpMode {
     };
     //                         name      top    fwdAcc   fwdDec  turnAcc  turnDec
     const DriveMode ECO    = { "ECO",    0.50f, 0.007f,  0.02f,  0.008f,  0.025f }; // ~1.4 s to full, half speed
-    const DriveMode NORMAL = { "NORMAL", 1.00f, 0.0125f, 0.025f, 0.015f,  0.03f  }; // ~0.8 s to full
-    const DriveMode SPORT  = { "SPORT",  1.00f, 0.025f,  0.04f,  0.025f,  0.04f  }; // ~0.4 s to full
+    const DriveMode NORMAL = { "NORMAL", 1.00f, 0.02f,   0.04f,  0.025f,  0.05f  }; // ~0.5 s to full (was 0.8 s)
+    const DriveMode SPORT  = { "SPORT",  1.00f, 0.035f,  0.06f,  0.035f,  0.06f  }; // ~0.3 s to full
     const DriveMode* mode = &NORMAL;   // start in NORMAL
     bool _eco = false;                 // eco on/off (toggled by its button)
 
@@ -76,8 +76,11 @@ class Oakbots : public NRLOpMode {
     // FIX 3: arm moves smoothly while D-pad up/down is HELD.
     float armTarget = 90;          // where the arm is being told to go
     const float ARM_STEP = 0.6f;   // degrees per tick (60 deg/sec) - slower = smoother under load
-    const float ARM_MIN  = 20;     // lowest the arm may go  - adjust for your robot
-    const float ARM_MAX  = 160;    // highest the arm may go - adjust for your robot
+    // Full servo range per NRL HexaServo.h (500-2500us = 0-180 deg).
+    // Arm is mounted reversed: ARM_MIN = arm fully UP, ARM_MAX = fully DOWN.
+    // If the arm hits the frame at either end, pull that number back a little.
+    const float ARM_MIN  = 0;      // arm fully up
+    const float ARM_MAX  = 180;    // arm fully down
 
     // Gripper moves smoothly while RB/LB is HELD.
     float gripTarget = 90;          // where the gripper is being told to go

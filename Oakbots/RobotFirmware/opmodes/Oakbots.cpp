@@ -9,6 +9,7 @@
 #define BTN_ARM_UP        BTN_DPAD_UP     // D-pad up    (photo: lower button of left cluster)
 #define BTN_ARM_DOWN      BTN_DPAD_DOWN   // D-pad down  (photo: upper button of left cluster)
 #define BTN_ECO_TOGGLE    BTN_DPAD_LEFT   // D-pad left  (photo: right button of left cluster)
+#define BTN_DROPPER       BTN_DPAD_RIGHT  // D-pad right (photo: left button of left cluster) - press = open/close
 #define BTN_GRIP_OPEN     BTN_RB          // RB          (photo: left red side button)
 #define BTN_GRIP_CLOSE    BTN_LB          // LB          (photo: right red side button)
 #define SW_SPORT          BTN_RT          // RIGHT_TOGGLE (photo: bottom-left switch) - check name!
@@ -25,6 +26,10 @@ static HexaDCMotor rightMotor {{ .dirPin = MOTOR_R_DIR, .pwmPin = MOTOR_R_PWM, .
 static TankDrive drive(leftMotor, rightMotor);
 static HexaServo arm     {{ .signalPin = SERVO_1, .startAngle = 90.0f, .settleMs = 0 }};
 static HexaServo gripper {{ .signalPin = SERVO_2, .startAngle = 90.0f, .settleMs = 0 }};
+// Payload dropper at the back of the robot - plug its servo into SERVO 3.
+static constexpr float DROP_CLOSED = 0;     // holds the items in   - tune on the robot
+static constexpr float DROP_OPEN   = 90;    // lets the items fall  - tune on the robot
+static HexaServo dropper {{ .signalPin = SERVO_3, .startAngle = DROP_CLOSED, .settleMs = 0 }};
 
 class Oakbots : public NRLOpMode {
     // FIX 2: straight-line trim.
@@ -89,6 +94,7 @@ class Oakbots : public NRLOpMode {
 
     // Gripper moves smoothly while RB/LB is HELD.
     float gripTarget = 90;          // where the gripper is being told to go
+    bool  _dropOpen  = false;       // payload dropper open/closed
     const float GRIP_STEP = 1.5f;   // degrees per tick (150 deg/sec)
     const float GRIP_MIN  = 0;      // most closed - TEMPORARY 0 for calibration, see notes
     const float GRIP_MAX  = 120;    // most open   - adjust for your gripper
@@ -100,9 +106,11 @@ public:
         rightMotor.begin();
         arm.begin();
         gripper.begin();
+        dropper.begin();                // starts CLOSED
         _oledOk = _oled.begin();       // remember whether the screen started
         armTarget = 90;
         gripTarget = 90;
+        _dropOpen = false;
         forwardNow = 0;
         turnNow = 0;
         mode = &NORMAL;
@@ -151,6 +159,13 @@ public:
         if (gripTarget < GRIP_MIN) gripTarget = GRIP_MIN;
         gripper.setPosition(gripTarget);
 
+        // ---- Payload dropper ----
+        // Press once = open (drop items), press again = close.
+        if (gamepad1.justPressed(BTN_DROPPER)) {
+            _dropOpen = !_dropOpen;
+            dropper.setPosition(_dropOpen ? DROP_OPEN : DROP_CLOSED);
+        }
+
         // ---- Heading (IMU) ----
         // Press A to reset heading to 0. Keep robot still ~0.5 s after START.
         if (gamepad1.justPressed(BTN_A)) NRLComms::zeroHeading();
@@ -194,6 +209,7 @@ public:
         telemetry.addData("servo A", power.getServoCurrent());   // jumps up when a servo strains
         telemetry.addData("arm", armTarget);
         telemetry.addData("gripper", gripTarget);
+        telemetry.addData("dropper", _dropOpen ? "OPEN" : "CLOSED");
     }
 
     void stop() override {
@@ -202,6 +218,7 @@ public:
         userLed.setOff();
         arm.detach();
         gripper.detach();
+        dropper.detach();
     }
 };
 
